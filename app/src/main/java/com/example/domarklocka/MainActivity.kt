@@ -1,3 +1,4 @@
+
 package com.example.domarklocka
 
 import android.app.Activity
@@ -12,10 +13,10 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.view.Gravity
-import android.view.View
+import android.view.MotionEvent
 import android.view.WindowManager
-import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.view.inputmethod.EditorInfo
 import android.text.InputType
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -25,6 +26,7 @@ class MainActivity : Activity() {
 
     private lateinit var timerText: TextView
     private lateinit var statusText: TextView
+
     private val handler = Handler(Looper.getMainLooper())
 
     private var running = false
@@ -34,6 +36,10 @@ class MainActivity : Activity() {
     private var halfLength = 30 * 60 * 1000L
 
     private var vibrator: Vibrator? = null
+
+    private var longPressTriggered = false
+    private var resetConfirmationArmed = false
+    private var confirmingTap = false
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
@@ -57,7 +63,10 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun makeInput(hintText: String, initial: String): EditText {
+    private fun makeInput(
+        hintText: String,
+        initial: String
+    ): EditText {
         return EditText(this).apply {
             hint = hintText
             setText(initial)
@@ -76,7 +85,12 @@ class MainActivity : Activity() {
     private fun showSettings() {
         running = false
         finished = false
+        longPressTriggered = false
+        resetConfirmationArmed = false
+        confirmingTap = false
+
         handler.removeCallbacks(update)
+        handler.removeCallbacks(resetHold)
         stopVibration()
 
         window.clearFlags(
@@ -148,6 +162,7 @@ class MainActivity : Activity() {
         )
 
         val message = makeText("", 12f)
+
         layout.addView(
             message,
             LinearLayout.LayoutParams(
@@ -156,33 +171,38 @@ class MainActivity : Activity() {
             )
         )
 
-        val confirm = makeText("✓", 30f, true).apply {
-            setOnClickListener {
-                val h = hours.text.toString().toLongOrNull() ?: 0L
-                val m = minutes.text.toString().toLongOrNull() ?: 0L
-                val s = seconds.text.toString().toLongOrNull() ?: 0L
+        val confirm = makeText("✓", 30f, true)
 
-                if (m > 59 || s > 59 || h < 0 || m < 0 || s < 0) {
-                    message.text = "Kontrollera tiden"
-                } else {
-                    val totalSeconds = h * 3600L + m * 60L + s
+        confirm.setOnClickListener {
+            val h = hours.text.toString().toLongOrNull() ?: 0L
+            val m = minutes.text.toString().toLongOrNull() ?: 0L
+            val s = seconds.text.toString().toLongOrNull() ?: 0L
 
-                    if (totalSeconds < 1L ||
-                        totalSeconds > Long.MAX_VALUE / 1000L
-                    ) {
-                        message.text = "Ange minst 1 sekund"
-                    } else {
-                        halfLength = totalSeconds * 1000L
-
-                        val imm = getSystemService(
-                            Context.INPUT_METHOD_SERVICE
-                        ) as InputMethodManager
-                        imm.hideSoftInputFromWindow(window.decorView.windowToken, 0)
-
-                        showTimer()
-                    }
-                }
+            if (h < 0 || h > 999999L ||
+                m !in 0L..59L || s !in 0L..59L
+            ) {
+                message.text = "Kontrollera tiden"
+                return@setOnClickListener
             }
+
+            val totalSeconds = h * 3600L + m * 60L + s
+
+            if (totalSeconds < 1L) {
+                message.text = "Ange minst 1 sekund"
+                return@setOnClickListener
+            }
+
+            halfLength = totalSeconds * 1000L
+
+            val imm = getSystemService(
+                Context.INPUT_METHOD_SERVICE
+            ) as InputMethodManager
+
+            imm.hideSoftInputFromWindow(
+                window.decorView.windowToken, 0
+            )
+
+            showTimer()
         }
 
         layout.addView(
@@ -200,6 +220,9 @@ class MainActivity : Activity() {
         elapsedBeforePause = 0L
         running = false
         finished = false
+        resetConfirmationArmed = false
+        longPressTriggered = false
+        confirmingTap = false
 
         window.addFlags(
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
@@ -212,6 +235,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setBackgroundColor(Color.BLACK)
+
             addView(
                 timerText,
                 LinearLayout.LayoutParams(
@@ -219,6 +243,7 @@ class MainActivity : Activity() {
                     dp(65)
                 )
             )
+
             addView(
                 statusText,
                 LinearLayout.LayoutParams(
@@ -231,27 +256,82 @@ class MainActivity : Activity() {
         setContentView(layout)
         updateDisplay(0L)
 
-        layout.setOnClickListener {
-            when {
-                finished -> {
-                    stopVibration()
-                    showSettings()
+        layout.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    longPressTriggered = false
+                    confirmingTap = resetConfirmationArmed
+
+                    if (!running && !finished &&
+                        !resetConfirmationArmed
+                    ) {
+                        handler.postDelayed(resetHold, 3000L)
+                    }
+
+                    true
                 }
 
-                running -> {
-                    elapsedBeforePause +=
-                        SystemClock.elapsedRealtime() - startTime
-                    running = false
-                    handler.removeCallbacks(update)
-                    statusText.text = "PAUSAD"
+                MotionEvent.ACTION_UP -> {
+                    handler.removeCallbacks(resetHold)
+
+                    if (longPressTriggered) {
+                        longPressTriggered = false
+                        true
+                    } else if (confirmingTap) {
+                        confirmingTap = false
+                        resetConfirmationArmed = false
+                        showSettings()
+                        true
+                    } else {
+                        handleShortTap()
+                        true
+                    }
                 }
 
-                else -> {
-                    startTime = SystemClock.elapsedRealtime()
-                    running = true
-                    statusText.text = "TRYCK FÖR ATT PAUSA"
-                    handler.post(update)
+                MotionEvent.ACTION_CANCEL -> {
+                    handler.removeCallbacks(resetHold)
+                    longPressTriggered = false
+                    confirmingTap = false
+                    true
                 }
+
+                else -> true
+            }
+        }
+    }
+
+    private val resetHold = Runnable {
+        if (!running && !finished &&
+            !resetConfirmationArmed
+        ) {
+            longPressTriggered = true
+            resetConfirmationArmed = true
+            statusText.text = "TRYCK FÖR ATT ÄNDRA TID"
+        }
+    }
+
+    private fun handleShortTap() {
+        when {
+            finished -> {
+                stopVibration()
+                showSettings()
+            }
+
+            running -> {
+                elapsedBeforePause +=
+                    SystemClock.elapsedRealtime() - startTime
+
+                running = false
+                handler.removeCallbacks(update)
+                statusText.text =
+                    "PAUSAD - HÅLL 3 SEK FÖR ÅTERSTÄLLNING"
+            }
+
+            else -> {
+                startTime = SystemClock.elapsedRealtime()
+                running = true
+                statusText.text = "TRYCK FÖR ATT PAUSA"
+                handler.post(update)
             }
         }
     }
@@ -274,7 +354,7 @@ class MainActivity : Activity() {
                 startRepeatingVibration()
             } else {
                 updateDisplay(elapsed)
-                handler.postDelayed(this, 100)
+                handler.postDelayed(this, 100L)
             }
         }
     }
@@ -286,9 +366,13 @@ class MainActivity : Activity() {
         val seconds = totalSeconds % 60L
 
         timerText.text = if (halfLength >= 3600000L) {
-            String.format("%02d:%02d:%02d", hours, minutes, seconds)
+            String.format(
+                "%02d:%02d:%02d", hours, minutes, seconds
+            )
         } else {
-            String.format("%02d:%02d", totalSeconds / 60L, seconds)
+            String.format(
+                "%02d:%02d", totalSeconds / 60L, seconds
+            )
         }
     }
 
@@ -297,6 +381,7 @@ class MainActivity : Activity() {
             val manager = getSystemService(
                 Context.VIBRATOR_MANAGER_SERVICE
             ) as VibratorManager
+
             manager.defaultVibrator
         } else {
             @Suppress("DEPRECATION")
@@ -310,7 +395,7 @@ class MainActivity : Activity() {
         if (vibrator?.hasVibrator() == true) {
             vibrator?.vibrate(
                 VibrationEffect.createWaveform(
-                    longArrayOf(0, 700, 300),
+                    longArrayOf(0L, 700L, 300L),
                     0
                 )
             )
@@ -324,6 +409,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         handler.removeCallbacks(update)
+        handler.removeCallbacks(resetHold)
         stopVibration()
         super.onDestroy()
     }
