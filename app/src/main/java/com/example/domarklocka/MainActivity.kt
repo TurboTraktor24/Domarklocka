@@ -578,7 +578,7 @@ scroll.addView(
 
         val restart = makeText("↻ SAMMA TID", 16f, true)
         restart.setOnClickListener {
-            showTimer(startImmediately = true)
+            showTimer()
         }
 
         layout.addView(
