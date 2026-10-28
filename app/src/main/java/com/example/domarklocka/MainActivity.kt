@@ -187,7 +187,9 @@ class MainActivity : Activity() {
 
             val totalSeconds = h * 3600L + m * 60L + s
 
-            if (totalSeconds < 1L) {
+            if (totalSeconds < 1L ||
+                totalSeconds > Long.MAX_VALUE / 1000L
+            ) {
                 message.text = "Ange minst 1 sekund"
                 return@setOnClickListener
             }
@@ -323,14 +325,15 @@ class MainActivity : Activity() {
 
                 running = false
                 handler.removeCallbacks(update)
-                statusText.text =
-                    "PAUSAD - HÅLL 3 SEK FÖR ÅTERSTÄLLNING"
+                statusText.text = "PAUSAD"
+                vibratePause()
             }
 
             else -> {
                 startTime = SystemClock.elapsedRealtime()
                 running = true
                 statusText.text = "TRYCK FÖR ATT PAUSA"
+                vibrateStart()
                 handler.post(update)
             }
         }
@@ -362,12 +365,12 @@ class MainActivity : Activity() {
     private fun updateDisplay(elapsed: Long) {
         val totalSeconds = elapsed / 1000L
         val hours = totalSeconds / 3600L
-        val minutes = (totalSeconds / 60L) % 60L
         val seconds = totalSeconds % 60L
 
         timerText.text = if (halfLength >= 3600000L) {
             String.format(
-                "%02d:%02d:%02d", hours, minutes, seconds
+                "%02d:%02d:%02d",
+                hours, (totalSeconds / 60L) % 60L, seconds
             )
         } else {
             String.format(
@@ -381,12 +384,31 @@ class MainActivity : Activity() {
             val manager = getSystemService(
                 Context.VIBRATOR_MANAGER_SERVICE
             ) as VibratorManager
-
             manager.defaultVibrator
         } else {
             @Suppress("DEPRECATION")
             getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         }
+    }
+
+    private fun vibrateStart() {
+        vibrator = getVibrator()
+        vibrator?.vibrate(
+            VibrationEffect.createOneShot(
+                60L,
+                VibrationEffect.DEFAULT_AMPLITUDE
+            )
+        )
+    }
+
+    private fun vibratePause() {
+        vibrator = getVibrator()
+        vibrator?.vibrate(
+            VibrationEffect.createWaveform(
+                longArrayOf(0L, 70L, 90L, 70L),
+                -1
+            )
+        )
     }
 
     private fun startRepeatingVibration() {
