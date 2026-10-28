@@ -1,22 +1,25 @@
-
 package com.example.domarklocka
 
 import android.app.Activity
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.content.Context
+import android.graphics.Color
+import android.graphics.Typeface
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.text.InputType
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.graphics.Color
-import android.graphics.Typeface
-import android.content.Context
-import android.os.SystemClock
-import android.os.Handler
-import android.os.Looper
 
 class MainActivity : Activity() {
 
@@ -30,104 +33,267 @@ class MainActivity : Activity() {
     private var startTime = 0L
     private var halfLength = 30 * 60 * 1000L
 
-    private val update = object : Runnable {
-        override fun run() {
-            if (running) {
-                val elapsed = elapsedBeforePause +
-                    (SystemClock.elapsedRealtime() - startTime)
+    private var vibrator: Vibrator? = null
 
-                if (elapsed >= halfLength) {
-                    elapsedBeforePause = halfLength
-                    running = false
-                    finished = true
-                    vibrate()
-                    statusText.text = "HALVLEKEN SLUT"
-                    updateDisplay(halfLength)
-                    window.clearFlags(
-                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-                    )
-                } else {
-                    updateDisplay(elapsed)
-                    handler.postDelayed(this, 100)
-                }
-            }
-        }
-    }
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        showSettings()
+    }
+
+    private fun makeText(
+        value: String,
+        size: Float,
+        bold: Boolean = false
+    ): TextView {
+        return TextView(this).apply {
+            text = value
+            textSize = size
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            if (bold) typeface = Typeface.DEFAULT_BOLD
+        }
+    }
+
+    private fun makeInput(hintText: String, initial: String): EditText {
+        return EditText(this).apply {
+            hint = hintText
+            setText(initial)
+            textSize = 18f
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            gravity = Gravity.CENTER
+            inputType = InputType.TYPE_CLASS_NUMBER
+            imeOptions = EditorInfo.IME_ACTION_DONE
+            isSingleLine = true
+            setSelectAllOnFocus(true)
+            setPadding(dp(2), 0, dp(2), 0)
+        }
+    }
+
+    private fun showSettings() {
+        running = false
+        finished = false
+        handler.removeCallbacks(update)
+        stopVibration()
+
+        window.clearFlags(
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        )
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setBackgroundColor(Color.BLACK)
+        }
+
+        layout.addView(
+            makeText("HALVLEKENS LÄNGD", 16f, true),
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(45)
+            )
+        )
+
+        val fields = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+
+        val hours = makeInput("h", "0")
+        val minutes = makeInput("min", "30")
+        val seconds = makeInput("sek", "0")
+
+        fun addField(field: EditText, label: String) {
+            val column = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+            }
+
+            column.addView(
+                makeText(label, 12f),
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(24)
+                )
+            )
+
+            column.addView(
+                field,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(48)
+                )
+            )
+
+            fields.addView(
+                column,
+                LinearLayout.LayoutParams(0, dp(75), 1f)
+            )
+        }
+
+        addField(hours, "TIM")
+        addField(minutes, "MIN")
+        addField(seconds, "SEK")
+
+        layout.addView(
+            fields,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(80)
+            )
+        )
+
+        val message = makeText("", 12f)
+        layout.addView(
+            message,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(28)
+            )
+        )
+
+        val confirm = makeText("✓", 30f, true).apply {
+            setOnClickListener {
+                val h = hours.text.toString().toLongOrNull() ?: 0L
+                val m = minutes.text.toString().toLongOrNull() ?: 0L
+                val s = seconds.text.toString().toLongOrNull() ?: 0L
+
+                if (m > 59 || s > 59 || h < 0 || m < 0 || s < 0) {
+                    message.text = "Kontrollera tiden"
+                } else {
+                    val totalSeconds = h * 3600L + m * 60L + s
+
+                    if (totalSeconds < 1L ||
+                        totalSeconds > Long.MAX_VALUE / 1000L
+                    ) {
+                        message.text = "Ange minst 1 sekund"
+                    } else {
+                        halfLength = totalSeconds * 1000L
+
+                        val imm = getSystemService(
+                            Context.INPUT_METHOD_SERVICE
+                        ) as InputMethodManager
+                        imm.hideSoftInputFromWindow(window.decorView.windowToken, 0)
+
+                        showTimer()
+                    }
+                }
+            }
+        }
+
+        layout.addView(
+            confirm,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(55)
+            )
+        )
+
+        setContentView(layout)
+    }
+
+    private fun showTimer() {
+        elapsedBeforePause = 0L
+        running = false
+        finished = false
 
         window.addFlags(
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
         )
 
-        timerText = TextView(this).apply {
-            text = "00:00"
-            textSize = 42f
-            setTextColor(Color.WHITE)
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-        }
-
-        statusText = TextView(this).apply {
-            text = "TRYCK FÖR ATT STARTA"
-            textSize = 12f
-            setTextColor(Color.LTGRAY)
-            gravity = Gravity.CENTER
-        }
+        timerText = makeText("00:00", 42f, true)
+        statusText = makeText("TRYCK FÖR ATT STARTA", 12f)
 
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setBackgroundColor(Color.BLACK)
-            addView(timerText)
-            addView(statusText)
+            addView(
+                timerText,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(65)
+                )
+            )
+            addView(
+                statusText,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(35)
+                )
+            )
         }
 
         setContentView(layout)
+        updateDisplay(0L)
 
         layout.setOnClickListener {
             when {
                 finished -> {
-                    elapsedBeforePause = 0L
-                    finished = false
-                    statusText.text = "TRYCK FÖR ATT STARTA"
-                    updateDisplay(0L)
+                    stopVibration()
+                    showSettings()
                 }
+
                 running -> {
                     elapsedBeforePause +=
                         SystemClock.elapsedRealtime() - startTime
                     running = false
                     handler.removeCallbacks(update)
                     statusText.text = "PAUSAD"
-                    window.clearFlags(
-                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-                    )
                 }
+
                 else -> {
                     startTime = SystemClock.elapsedRealtime()
                     running = true
                     statusText.text = "TRYCK FÖR ATT PAUSA"
-                    window.addFlags(
-                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-                    )
                     handler.post(update)
                 }
             }
         }
     }
 
-    private fun updateDisplay(elapsed: Long) {
-        val seconds = elapsed / 1000
-        val minutes = seconds / 60
-        val remainingSeconds = seconds % 60
-        timerText.text = String.format(
-            "%02d:%02d", minutes, remainingSeconds
-        )
+    private val update = object : Runnable {
+        override fun run() {
+            if (!running) return
+
+            val elapsed = elapsedBeforePause +
+                (SystemClock.elapsedRealtime() - startTime)
+
+            if (elapsed >= halfLength) {
+                elapsedBeforePause = halfLength
+                running = false
+                finished = true
+                handler.removeCallbacks(this)
+
+                updateDisplay(halfLength)
+                statusText.text = "HALVLEKEN SLUT"
+                startRepeatingVibration()
+            } else {
+                updateDisplay(elapsed)
+                handler.postDelayed(this, 100)
+            }
+        }
     }
 
-    private fun vibrate() {
-        val vibrator = if (android.os.Build.VERSION.SDK_INT >= 31) {
+    private fun updateDisplay(elapsed: Long) {
+        val totalSeconds = elapsed / 1000L
+        val hours = totalSeconds / 3600L
+        val minutes = (totalSeconds / 60L) % 60L
+        val seconds = totalSeconds % 60L
+
+        timerText.text = if (halfLength >= 3600000L) {
+            String.format("%02d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format("%02d:%02d", totalSeconds / 60L, seconds)
+        }
+    }
+
+    private fun getVibrator(): Vibrator {
+        return if (android.os.Build.VERSION.SDK_INT >= 31) {
             val manager = getSystemService(
                 Context.VIBRATOR_MANAGER_SERVICE
             ) as VibratorManager
@@ -136,19 +302,29 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         }
+    }
 
-        if (vibrator.hasVibrator()) {
-            vibrator.vibrate(
-                VibrationEffect.createOneShot(
-                    1000,
-                    VibrationEffect.DEFAULT_AMPLITUDE
+    private fun startRepeatingVibration() {
+        vibrator = getVibrator()
+
+        if (vibrator?.hasVibrator() == true) {
+            vibrator?.vibrate(
+                VibrationEffect.createWaveform(
+                    longArrayOf(0, 700, 300),
+                    0
                 )
             )
         }
     }
 
+    private fun stopVibration() {
+        vibrator?.cancel()
+        vibrator = null
+    }
+
     override fun onDestroy() {
         handler.removeCallbacks(update)
+        stopVibration()
         super.onDestroy()
     }
 }
