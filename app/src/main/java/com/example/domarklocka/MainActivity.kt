@@ -190,12 +190,12 @@ class MainActivity : Activity() {
         }
 
         scroll.addView(
-            layout,
-            ScrollView.LayoutParams(
-                ScrollView.LayoutParams.MATCH_PARENT,
-                ScrollView.LayoutParams.WRAP_CONTENT
-            )
-        )
+    layout,
+    ScrollView.LayoutParams(
+        ScrollView.LayoutParams.MATCH_PARENT,
+        ScrollView.LayoutParams.WRAP_CONTENT
+    )
+)
 
         layout.addView(
             makeText("HALVLEKENS LÄNGD", 16f, true),
