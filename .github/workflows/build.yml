@@ -1,0 +1,35 @@
+
+name: Bygg Domarklocka
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Hämta projektet
+        uses: actions/checkout@v4
+
+      - name: Installera Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Bygg APK
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: '8.9'
+          arguments: assembleDebug
+
+      - name: Spara APK
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: Domarklocka-APK
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
