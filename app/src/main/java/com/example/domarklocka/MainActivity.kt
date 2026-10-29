@@ -24,13 +24,18 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : Activity() {
 
     private lateinit var timerText: TextView
     private lateinit var statusText: TextView
+    private lateinit var matchClockText: TextView
 
     private val handler = Handler(Looper.getMainLooper())
+
     private val prefs by lazy {
         getSharedPreferences("domarklocka", Context.MODE_PRIVATE)
     }
@@ -44,6 +49,19 @@ class MainActivity : Activity() {
     private var halfLength = 30 * 60 * 1000L
     private var vibrator: Vibrator? = null
 
+    private var matchMode = false
+    private var matchScreenVisible = false
+    private var matchFinished = false
+
+    private var matchLength = 60 * 60 * 1000L
+    private var matchHalfLength = 30 * 60 * 1000L
+
+    // Total time completed before the current half.
+    private var totalElapsedBeforeHalf = 0L
+
+    // Duration of the current half, including a shorter final half.
+    private var currentHalfTarget = matchHalfLength
+
     private var longPressTriggered = false
     private var resetConfirmationArmed = false
     private var confirmingTap = false
@@ -54,7 +72,17 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         loadPresets()
-        showSettings()
+
+        matchLength = prefs.getLong(
+            "matchLength",
+            60 * 60 * 1000L
+        )
+        matchHalfLength = prefs.getLong(
+            "matchHalfLength",
+            30 * 60 * 1000L
+        )
+
+        showModeChooser()
     }
 
     private fun makeText(
@@ -123,9 +151,17 @@ class MainActivity : Activity() {
         val s = total % 60L
 
         return if (h > 0L) {
-            String.format("%02d:%02d:%02d", h, m, s)
+            String.format(
+                Locale.getDefault(),
+                "%02d:%02d:%02d",
+                h, m, s
+            )
         } else {
-            String.format("%02d:%02d", total / 60L, s)
+            String.format(
+                Locale.getDefault(),
+                "%02d:%02d",
+                total / 60L, s
+            )
         }
     }
 
@@ -133,25 +169,35 @@ class MainActivity : Activity() {
     private fun parseDuration(value: String): Long? {
         val parts = value.trim().split(":")
         if (parts.isEmpty() || parts.size > 3) return null
-        if (parts.any { it.isBlank() || it.toLongOrNull() == null }) {
-            return null
-        }
+
+        if (parts.any {
+                it.isBlank() || it.toLongOrNull() == null
+            }
+        ) return null
 
         val numbers = parts.map { it.toLong() }
         if (numbers.any { it < 0L }) return null
 
         val totalSeconds = when (numbers.size) {
             1 -> numbers[0]
+
             2 -> {
                 if (numbers[1] > 59L) return null
                 numbers[0] * 60L + numbers[1]
             }
+
             else -> {
-                if (numbers[1] > 59L || numbers[2] > 59L) return null
-                if (numbers[0] > (Long.MAX_VALUE / 1000L - 3600L) / 3600L) {
+                if (numbers[1] > 59L || numbers[2] > 59L) {
                     return null
                 }
-                numbers[0] * 3600L + numbers[1] * 60L + numbers[2]
+
+                if (numbers[0] >
+                    (Long.MAX_VALUE / 1000L - 3600L) / 3600L
+                ) return null
+
+                numbers[0] * 3600L +
+                    numbers[1] * 60L +
+                    numbers[2]
             }
         }
 
@@ -162,7 +208,72 @@ class MainActivity : Activity() {
         return totalSeconds * 1000L
     }
 
+    private fun showModeChooser() {
+        running = false
+        finished = false
+        matchScreenVisible = false
+        handler.removeCallbacks(update)
+        handler.removeCallbacks(clockUpdate)
+        handler.removeCallbacks(resetHold)
+        stopVibration()
+
+        window.clearFlags(
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        )
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setBackgroundColor(Color.BLACK)
+        }
+
+        layout.addView(
+            makeText("DOMARKLOCKA", 20f, true),
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(65)
+            )
+        )
+
+        val normal = makeText("VANLIGT STOPPUR", 17f, true)
+        normal.setOnClickListener {
+            matchMode = false
+            showSettings()
+        }
+
+        layout.addView(
+            normal,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(65)
+            )
+        )
+
+        val match = makeText("MATCHKLOCKA", 17f, true)
+        match.setOnClickListener {
+            matchMode = true
+            showMatchSettings()
+        }
+
+        layout.addView(
+            match,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(65)
+            )
+        )
+
+        setContentView(layout)
+    }
+
+    // ---------------------------------------------------------
+    // NORMAL STOPWATCH SETTINGS
+    // ---------------------------------------------------------
+
     private fun showSettings() {
+        matchMode = false
+        matchScreenVisible = false
         running = false
         finished = false
         longPressTriggered = false
@@ -170,6 +281,7 @@ class MainActivity : Activity() {
         confirmingTap = false
 
         handler.removeCallbacks(update)
+        handler.removeCallbacks(clockUpdate)
         handler.removeCallbacks(resetHold)
         stopVibration()
 
@@ -189,13 +301,14 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.BLACK)
         }
 
-scroll.addView(
-    layout,
-    LinearLayout.LayoutParams(
-        LinearLayout.LayoutParams.MATCH_PARENT,
-        LinearLayout.LayoutParams.WRAP_CONTENT
-    )
-)
+        scroll.addView(
+            layout,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+
         layout.addView(
             makeText("HALVLEKENS LÄNGD", 16f, true),
             LinearLayout.LayoutParams(
@@ -206,7 +319,10 @@ scroll.addView(
 
         val total = halfLength / 1000L
         val hours = makeInput("h", (total / 3600L).toString())
-        val minutes = makeInput("min", ((total / 60L) % 60L).toString())
+        val minutes = makeInput(
+            "min",
+            ((total / 60L) % 60L).toString()
+        )
         val seconds = makeInput("sek", (total % 60L).toString())
 
         val fields = LinearLayout(this).apply {
@@ -281,7 +397,9 @@ scroll.addView(
             preset.setOnClickListener {
                 val secondsTotal = time / 1000L
                 hours.setText((secondsTotal / 3600L).toString())
-                minutes.setText(((secondsTotal / 60L) % 60L).toString())
+                minutes.setText(
+                    ((secondsTotal / 60L) % 60L).toString()
+                )
                 seconds.setText((secondsTotal % 60L).toString())
                 message.text = "Vald tid: ${formatDuration(time)}"
             }
@@ -304,7 +422,11 @@ scroll.addView(
         addPreset.setOnClickListener {
             showDurationDialog("Nytt snabbval", "05:00") { time ->
                 if (presetTimes.contains(time)) {
-                    Toast.makeText(this, "Tiden finns redan", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        this,
+                        "Tiden finns redan",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 } else {
                     presetTimes.add(time)
                     savePresets()
@@ -353,7 +475,11 @@ scroll.addView(
                 Context.INPUT_METHOD_SERVICE
             ) as InputMethodManager
 
-            imm.hideSoftInputFromWindow(window.decorView.windowToken, 0)
+            imm.hideSoftInputFromWindow(
+                window.decorView.windowToken,
+                0
+            )
+
             showTimer()
         }
 
@@ -368,10 +494,200 @@ scroll.addView(
         setContentView(scroll)
     }
 
+    // ---------------------------------------------------------
+    // MATCH SETTINGS
+    // ---------------------------------------------------------
+
+    private fun showMatchSettings() {
+        matchMode = true
+        matchScreenVisible = false
+        running = false
+        finished = false
+
+        handler.removeCallbacks(update)
+        handler.removeCallbacks(clockUpdate)
+        handler.removeCallbacks(resetHold)
+        stopVibration()
+
+        window.clearFlags(
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        )
+
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(Color.BLACK)
+            isFillViewport = true
+        }
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setBackgroundColor(Color.BLACK)
+        }
+
+        scroll.addView(
+            layout,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+
+        layout.addView(
+            makeText("MATCHINSTÄLLNINGAR", 17f, true),
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(48)
+            )
+        )
+
+        layout.addView(
+            makeText("MATCHENS TOTALA LÄNGD", 13f, true),
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(32)
+            )
+        )
+
+        val totalInput = EditText(this).apply {
+            setText(formatDuration(matchLength))
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            textSize = 20f
+            gravity = Gravity.CENTER
+            inputType = InputType.TYPE_CLASS_TEXT
+            imeOptions = EditorInfo.IME_ACTION_DONE
+            isSingleLine = true
+            setSelectAllOnFocus(true)
+        }
+
+        layout.addView(
+            totalInput,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(48)
+            )
+        )
+
+        layout.addView(
+            makeText("HALVLEKENS LÄNGD", 13f, true),
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(32)
+            )
+        )
+
+        val halfInput = EditText(this).apply {
+            setText(formatDuration(matchHalfLength))
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            textSize = 20f
+            gravity = Gravity.CENTER
+            inputType = InputType.TYPE_CLASS_TEXT
+            imeOptions = EditorInfo.IME_ACTION_DONE
+            isSingleLine = true
+            setSelectAllOnFocus(true)
+        }
+
+        layout.addView(
+            halfInput,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(48)
+            )
+        )
+
+        layout.addView(
+            makeText("Exempel: 60:00 och 30:00", 11f),
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(28)
+            )
+        )
+
+        val message = makeText("", 12f)
+        layout.addView(
+            message,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(30)
+            )
+        )
+
+        val confirm = makeText("✓", 30f, true)
+        confirm.setOnClickListener {
+            val total = parseDuration(totalInput.text.toString())
+            val half = parseDuration(halfInput.text.toString())
+
+            if (total == null || half == null) {
+                message.text = "Ange giltiga tider"
+                return@setOnClickListener
+            }
+
+            if (half > total) {
+                message.text = "Halvleken kan inte vara längre än matchen"
+                return@setOnClickListener
+            }
+
+            matchLength = total
+            matchHalfLength = half
+
+            prefs.edit()
+                .putLong("matchLength", matchLength)
+                .putLong("matchHalfLength", matchHalfLength)
+                .apply()
+
+            val imm = getSystemService(
+                Context.INPUT_METHOD_SERVICE
+            ) as InputMethodManager
+
+            imm.hideSoftInputFromWindow(
+                window.decorView.windowToken,
+                0
+            )
+
+            totalElapsedBeforeHalf = 0L
+            currentHalfTarget = minOf(matchHalfLength, matchLength)
+            matchFinished = false
+            showMatchTimer()
+        }
+
+        layout.addView(
+            confirm,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(54)
+            )
+        )
+
+        val back = makeText("TILLBAKA", 13f, true)
+        back.setOnClickListener {
+            showModeChooser()
+        }
+
+        layout.addView(
+            back,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(42)
+            )
+        )
+
+        setContentView(scroll)
+    }
+
+    // ---------------------------------------------------------
+    // PRESET MANAGEMENT
+    // ---------------------------------------------------------
+
     private fun showPresetMenu(index: Int) {
         if (index !in presetTimes.indices) return
 
-        val options = arrayOf("Ändra tid", "Radera snabbval", "Avbryt")
+        val options = arrayOf(
+            "Ändra tid",
+            "Radera snabbval",
+            "Avbryt"
+        )
 
         AlertDialog.Builder(this)
             .setTitle(formatDuration(presetTimes[index]))
@@ -379,7 +695,10 @@ scroll.addView(
                 when (which) {
                     0 -> {
                         val current = formatDuration(presetTimes[index])
-                        showDurationDialog("Ändra snabbval", current) { time ->
+                        showDurationDialog(
+                            "Ändra snabbval",
+                            current
+                        ) { time ->
                             if (presetTimes.indices.contains(index)) {
                                 presetTimes[index] = time
                                 savePresets()
@@ -387,6 +706,7 @@ scroll.addView(
                             }
                         }
                     }
+
                     1 -> {
                         presetTimes.removeAt(index)
                         savePresets()
@@ -418,6 +738,7 @@ scroll.addView(
             .setView(input)
             .setPositiveButton("Spara") { _, _ ->
                 val time = parseDuration(input.text.toString())
+
                 if (time == null) {
                     Toast.makeText(
                         this,
@@ -432,10 +753,20 @@ scroll.addView(
             .show()
     }
 
+    // ---------------------------------------------------------
+    // NORMAL STOPWATCH SCREEN
+    // ---------------------------------------------------------
+
     private fun showTimer(startImmediately: Boolean = false) {
+        matchMode = false
+        matchScreenVisible = false
+
+        handler.removeCallbacks(clockUpdate)
+
         elapsedBeforePause = 0L
         running = false
         finished = false
+        matchFinished = false
         resetConfirmationArmed = false
         longPressTriggered = false
         confirmingTap = false
@@ -521,13 +852,111 @@ scroll.addView(
 
     private val resetHold = Runnable {
         if (!running && !finished &&
-            !resetConfirmationArmed
+            !resetConfirmationArmed && !matchMode
         ) {
             longPressTriggered = true
             resetConfirmationArmed = true
             statusText.text = "TRYCK FÖR ATT ÄNDRA TID"
         }
     }
+
+    // ---------------------------------------------------------
+    // MATCH CLOCK SCREEN
+    // ---------------------------------------------------------
+
+    private fun showMatchTimer() {
+        matchMode = true
+        matchScreenVisible = true
+
+        elapsedBeforePause = 0L
+        running = false
+        finished = false
+        resetConfirmationArmed = false
+        longPressTriggered = false
+        confirmingTap = false
+
+        currentHalfTarget = minOf(
+            matchHalfLength,
+            matchLength - totalElapsedBeforeHalf
+        )
+
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        )
+
+        matchClockText = makeText(currentRealTime(), 12f).apply {
+            setTextColor(Color.rgb(125, 125, 125))
+        }
+
+        timerText = makeText("00:00", 44f, true)
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            setBackgroundColor(Color.BLACK)
+
+            addView(
+                matchClockText,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(30)
+                )
+            )
+
+            addView(
+                timerText,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(100)
+                )
+            )
+        }
+
+        setContentView(layout)
+        updateDisplay(0L)
+
+        handler.removeCallbacks(clockUpdate)
+        handler.post(clockUpdate)
+
+        layout.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    true
+                }
+
+                MotionEvent.ACTION_UP -> {
+                    handleShortTap()
+                    true
+                }
+
+                else -> true
+            }
+        }
+    }
+
+    private fun currentRealTime(): String {
+        return SimpleDateFormat(
+            "HH:mm",
+            Locale.getDefault()
+        ).format(Date())
+    }
+
+    private val clockUpdate = object : Runnable {
+        override fun run() {
+            if (!matchScreenVisible) return
+
+            if (::matchClockText.isInitialized) {
+                matchClockText.text = currentRealTime()
+            }
+
+            handler.postDelayed(this, 1000L)
+        }
+    }
+
+    // ---------------------------------------------------------
+    // TIMER CONTROL
+    // ---------------------------------------------------------
 
     private fun handleShortTap() {
         when {
@@ -537,12 +966,17 @@ scroll.addView(
             }
 
             running -> {
-                elapsedBeforePause +=
+                val currentElapsed =
                     SystemClock.elapsedRealtime() - startTime
 
+                elapsedBeforePause += currentElapsed
                 running = false
                 handler.removeCallbacks(update)
-                statusText.text = "PAUSAD"
+
+                if (!matchMode) {
+                    statusText.text = "PAUSAD"
+                }
+
                 vibratePause()
             }
 
@@ -554,7 +988,11 @@ scroll.addView(
         startTime = SystemClock.elapsedRealtime()
         running = true
         finished = false
-        statusText.text = "TRYCK FÖR ATT PAUSA"
+
+        if (!matchMode) {
+            statusText.text = "TRYCK FÖR ATT PAUSA"
+        }
+
         vibrateStart()
         handler.removeCallbacks(update)
         handler.post(update)
@@ -568,39 +1006,131 @@ scroll.addView(
             setBackgroundColor(Color.BLACK)
         }
 
-        layout.addView(
-            makeText("HALVLEKEN SLUT", 17f, true),
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(48)
+        if (!matchMode) {
+            layout.addView(
+                makeText("HALVLEKEN SLUT", 17f, true),
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(48)
+                )
             )
-        )
 
-        val restart = makeText("↻ SAMMA TID", 16f, true)
-        restart.setOnClickListener {
-            showTimer()
+            val restart = makeText("↻ SAMMA TID", 16f, true)
+            restart.setOnClickListener {
+                showTimer()
+            }
+
+            layout.addView(
+                restart,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(52)
+                )
+            )
+
+            val change = makeText("ÄNDRA TID", 15f, true)
+            change.setOnClickListener {
+                showSettings()
+            }
+
+            layout.addView(
+                change,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(48)
+                )
+            )
+        } else if (matchFinished) {
+            layout.addView(
+                makeText("MATCHEN SLUT", 18f, true),
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(55)
+                )
+            )
+
+            val restart = makeText("↻ NY MATCH", 16f, true)
+            restart.setOnClickListener {
+                totalElapsedBeforeHalf = 0L
+                currentHalfTarget = minOf(
+                    matchHalfLength,
+                    matchLength
+                )
+                elapsedBeforePause = 0L
+                matchFinished = false
+                showMatchTimer()
+            }
+
+            layout.addView(
+                restart,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(52)
+                )
+            )
+
+            val change = makeText(
+                "ÄNDRA MATCHINSTÄLLNINGAR",
+                13f,
+                true
+            )
+            change.setOnClickListener {
+                showMatchSettings()
+            }
+
+            layout.addView(
+                change,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(48)
+                )
+            )
+        } else {
+            layout.addView(
+                makeText("HALVLEKEN SLUT", 17f, true),
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(48)
+                )
+            )
+
+            val nextHalf = makeText("NÄSTA HALVLEK", 16f, true)
+            nextHalf.setOnClickListener {
+                elapsedBeforePause = 0L
+                finished = false
+                matchFinished = false
+                currentHalfTarget = minOf(
+                    matchHalfLength,
+                    matchLength - totalElapsedBeforeHalf
+                )
+                showMatchTimer()
+            }
+
+            layout.addView(
+                nextHalf,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(52)
+                )
+            )
+
+            val change = makeText(
+                "ÄNDRA MATCHINSTÄLLNINGAR",
+                13f,
+                true
+            )
+            change.setOnClickListener {
+                showMatchSettings()
+            }
+
+            layout.addView(
+                change,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(48)
+                )
+            )
         }
-
-        layout.addView(
-            restart,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(52)
-            )
-        )
-
-        val change = makeText("ÄNDRA TID", 15f, true)
-        change.setOnClickListener {
-            showSettings()
-        }
-
-        layout.addView(
-            change,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(48)
-            )
-        )
 
         setContentView(layout)
     }
@@ -612,14 +1142,39 @@ scroll.addView(
             val elapsed = elapsedBeforePause +
                 (SystemClock.elapsedRealtime() - startTime)
 
-            if (elapsed >= halfLength) {
-                elapsedBeforePause = halfLength
+            if (!matchMode) {
+                if (elapsed >= halfLength) {
+                    elapsedBeforePause = halfLength
+                    running = false
+                    finished = true
+                    handler.removeCallbacks(this)
+
+                    updateDisplay(halfLength)
+                    statusText.text = "HALVLEKEN SLUT"
+                    startRepeatingVibration()
+                } else {
+                    updateDisplay(elapsed)
+                    handler.postDelayed(this, 100L)
+                }
+
+                return
+            }
+
+            // Match mode: the displayed clock resets each half,
+            // while totalElapsedBeforeHalf tracks the whole match.
+            if (elapsed >= currentHalfTarget) {
+                elapsedBeforePause = currentHalfTarget
+                totalElapsedBeforeHalf += currentHalfTarget
+
                 running = false
                 finished = true
                 handler.removeCallbacks(this)
 
-                updateDisplay(halfLength)
-                statusText.text = "HALVLEKEN SLUT"
+                updateDisplay(currentHalfTarget)
+
+                matchFinished =
+                    totalElapsedBeforeHalf >= matchLength
+
                 startRepeatingVibration()
             } else {
                 updateDisplay(elapsed)
@@ -633,17 +1188,30 @@ scroll.addView(
         val hours = totalSeconds / 3600L
         val seconds = totalSeconds % 60L
 
-        timerText.text = if (halfLength >= 3600000L) {
+        timerText.text = if (
+            (matchMode && currentHalfTarget >= 3600000L) ||
+            (!matchMode && halfLength >= 3600000L)
+        ) {
             String.format(
+                Locale.getDefault(),
                 "%02d:%02d:%02d",
-                hours, (totalSeconds / 60L) % 60L, seconds
+                hours,
+                (totalSeconds / 60L) % 60L,
+                seconds
             )
         } else {
             String.format(
-                "%02d:%02d", totalSeconds / 60L, seconds
+                Locale.getDefault(),
+                "%02d:%02d",
+                totalSeconds / 60L,
+                seconds
             )
         }
     }
+
+    // ---------------------------------------------------------
+    // VIBRATION
+    // ---------------------------------------------------------
 
     private fun getVibrator(): Vibrator {
         return if (android.os.Build.VERSION.SDK_INT >= 31) {
@@ -697,6 +1265,7 @@ scroll.addView(
 
     override fun onDestroy() {
         handler.removeCallbacks(update)
+        handler.removeCallbacks(clockUpdate)
         handler.removeCallbacks(resetHold)
         stopVibration()
         super.onDestroy()
