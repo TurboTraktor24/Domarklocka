@@ -471,6 +471,7 @@ class MainActivity : Activity() {
 
             halfLength = totalSeconds * 1000L
 
+
             val imm = getSystemService(
                 Context.INPUT_METHOD_SERVICE
             ) as InputMethodManager
@@ -488,7 +489,9 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(50)
-                
+            )
+        )
+
         val backToMenu = makeText("← MENY", 14f, true)
         backToMenu.setOnClickListener {
             showModeChooser()
@@ -504,6 +507,7 @@ class MainActivity : Activity() {
 
         setContentView(scroll)
     }
+
 
     // ---------------------------------------------------------
     // MATCH SETTINGS
