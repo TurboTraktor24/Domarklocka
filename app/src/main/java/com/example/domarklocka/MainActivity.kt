@@ -488,6 +488,17 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(50)
+                
+        val backToMenu = makeText("← MENY", 14f, true)
+        backToMenu.setOnClickListener {
+            showModeChooser()
+        }
+
+        layout.addView(
+            backToMenu,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(42)
             )
         )
 
